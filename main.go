@@ -5,8 +5,8 @@ package main
 import (
 	"flag"
 	"fmt"
-	"github.com/mitchellh/goamz/aws"
-	"github.com/mitchellh/goamz/s3"
+	"github.com/crowdmob/goamz/aws"
+	"github.com/crowdmob/goamz/s3"
 	"io/ioutil"
 	"log"
 	"os"
@@ -19,12 +19,14 @@ const (
 	DEFAULT_MIME_TYPE = "binary/octet-stream"
 )
 
-var s3_bucket = flag.String("bucket", "", "S3 bucket name")
-var s3_key = flag.String("key", "", "S3 key name (use / notation for folders)")
-var s3_region = flag.String("region", DEFAULT_REGION, fmt.Sprintf("AWS S3 region; default: %v", DEFAULT_REGION))
+var s3_bucket = flag.String("bucket", "", "S3 bucket name (required)")
+var s3_key = flag.String("key", "", "S3 key name (required; use / notation for folders)")
+var s3_region = flag.String("region", DEFAULT_REGION, "AWS S3 region")
 var chunk_size = flag.Int64("chunk_size", 50000000, "multipart upload chunk size (bytes)")
-var mime_type = flag.String("mime_type", DEFAULT_MIME_TYPE, fmt.Sprintf("Content-type (MIME type); default: %v", DEFAULT_MIME_TYPE))
-var expected_size = flag.Int64("expected_size", 0, "expected input size (optional)")
+var mime_type = flag.String("mime_type", DEFAULT_MIME_TYPE, "Content-type (MIME type)")
+var expected_size = flag.Int64("expected_size", 0, "expected input size (fail if out of bounds)")
+var acl_string = flag.String("acl", "bucket-owner-full-control", "ACL for new object")
+var use_sse = flag.Bool("sse", false, "use server side encryption")
 var multi_error = false
 
 var aws_auth, aws_auth_err = aws.EnvAuth()
@@ -32,23 +34,30 @@ var aws_auth, aws_auth_err = aws.EnvAuth()
 func init() {
 	flag.Parse()
 	if *s3_bucket == "" {
-		log.Fatalf("S3 bucket parameter missing\n")
+		fmt.Fprintf(os.Stderr, "S3 bucket parameter missing\n")
+		os.Exit(1)
 	}
 	if *s3_key == "" {
-		log.Fatalf("S3 key parameter missing\n")
+		fmt.Fprintf(os.Stderr, "S3 key parameter missing\n")
+		os.Exit(1)
 	}
 	if os.Getenv("AWS_ACCESS_KEY") == "" || os.Getenv("AWS_SECRET_KEY") == "" {
-		log.Fatalf("AWS credentials must be passed as environment variables\n")
+		fmt.Fprintf(os.Stderr, "AWS credentials must be passed as environment variables\n")
+		os.Exit(1)
 	}
 	if aws_auth_err != nil {
-		log.Fatalf("AWS authentication error\n")
+		fmt.Fprintf(os.Stderr, "AWS authentication error\n")
+		os.Exit(1)
 	}
 }
 
 func main() {
 	s := s3.New(aws_auth, aws.Regions[*s3_region])
+	options := s3.Options{
+		SSE: *use_sse,
+	}
 	b := s.Bucket(*s3_bucket)
-	m, err := b.Multi(*s3_key, *mime_type, s3.BucketOwnerFull)
+	m, err := b.Multi(*s3_key, *mime_type, s3.ACL(*acl_string), options)
 	if err != nil {
 		log.Fatalf("Error initializing multipart upload: %v\n", err)
 	}
@@ -89,10 +98,15 @@ func main() {
 			log.Fatalf("read count overflow!\n")
 		}
 		if n > 0 {
-			write_buffer := make([]byte, n)
-			copy(write_buffer, read_buffer)
-			_, err := temp_files[current_chunk_index].Write(write_buffer)
-			if err != nil {
+			var w_err error
+			if n < TMP_BUFFER_SIZE {
+				write_buffer := make([]byte, n)
+				copy(write_buffer, read_buffer)
+				_, w_err = temp_files[current_chunk_index].Write(write_buffer)
+			} else {
+				_, w_err = temp_files[current_chunk_index].Write(read_buffer)
+			}
+			if w_err != nil {
 				log.Fatalf("Error writing to temp file: %v: %v\n", temp_files[current_chunk_index].Name(), err)
 			}
 			temp_files[current_chunk_index].Sync()
@@ -116,7 +130,6 @@ func main() {
 	}
 	defer cleanup(temp_files)
 
-	// TODO: global timeout
 	uploads.Wait()
 
 	if multi_error {
@@ -149,6 +162,7 @@ func upload_temp_file(f *os.File, uploads sync.WaitGroup, ci int, m *s3.Multi, p
 }
 
 func cleanup(tf []*os.File) {
+	// this should never find temporary files since goroutines should have deleted them
 	for i := range tf {
 		tf[i].Close()
 		if _, err := os.Stat(tf[i].Name()); err == nil {
@@ -179,6 +193,7 @@ func s3_part_upload(ci int, i *os.File, m *s3.Multi, c chan s3.Part, uploads syn
 		multi_error = true
 		return
 	}
+	defer f.Close() //defer in case of error even though we explicitly close below
 
 	stat, err := f.Stat()
 	if err != nil {
@@ -200,7 +215,9 @@ func s3_part_upload(ci int, i *os.File, m *s3.Multi, c chan s3.Part, uploads syn
 
 	log.Printf("Chunk %v: upload success (N: %v, ETag: %v, Size: %v)\n", ci, p.N, p.ETag, p.Size)
 
+	// explicitly close prior to deleting file
 	i.Close()
+	f.Close()
 	err = os.Remove(tn)
 	if err != nil {
 		log.Printf("Chunk %v: error deleting temp file: %v: %v\n", ci, tn, err)
