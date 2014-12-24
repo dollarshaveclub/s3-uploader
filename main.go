@@ -45,6 +45,10 @@ func init() {
 		fmt.Fprintf(os.Stderr, "S3 key parameter missing\n")
 		os.Exit(1)
 	}
+	if *chunk_size < 5000000 || *chunk_size > 5000000000 { // 5MB <= x <= 5GB
+		fmt.Fprintf(os.Stderr, "Invalid chunk size: must be between 5MB and 5GB (inclusive)\n")
+		os.Exit(1)
+	}
 	if os.Getenv("AWS_ACCESS_KEY") == "" || os.Getenv("AWS_SECRET_KEY") == "" {
 		fmt.Fprintf(os.Stderr, "AWS credentials must be passed as environment variables\n")
 		os.Exit(1)
@@ -229,7 +233,7 @@ func s3_part_upload(ci int, i *os.File, m *s3.Multi, c chan s3.Part, uploads syn
 		if u_err != nil {
 			log.Printf("Chunk %v: upload error: %v (%v)\n", ci, u_err, tn)
 			if i <= *retrys {
-				log.Printf("Chunk %v: retrying (%v/%v)", ci, i, retrys)
+				log.Printf("Chunk %v: retrying (%v/%v)", ci, i, *retrys)
 			} else {
 				multi_error.Lock()
 				multi_error.error = true
