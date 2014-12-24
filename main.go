@@ -221,13 +221,13 @@ func s3_part_upload(ci int, i *os.File, m *s3.Multi, c chan s3.Part, uploads syn
 		return
 	}
 
-	log.Printf("Chunk %v: starting upload (%v; size: %v)\n", ci, tn, stat.Size())
-
 	var p s3.Part
+	var u_err error
 	for i := uint(1); true; i++ {
-		p, err := m.PutPart(ci+1, f)
-		if err != nil {
-			log.Printf("Chunk %v: upload error: %v (%v)\n", ci, err, tn)
+		log.Printf("Chunk %v: starting upload (%v; size: %v)\n", ci, tn, stat.Size())
+		p, u_err = m.PutPart(ci+1, f)
+		if u_err != nil {
+			log.Printf("Chunk %v: upload error: %v (%v)\n", ci, u_err, tn)
 			if i <= *retrys {
 				log.Printf("Chunk %v: retrying (%v/%v)", ci, i, retrys)
 			} else {
