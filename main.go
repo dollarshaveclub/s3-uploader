@@ -151,7 +151,9 @@ func main() {
 		parts[i] = <-part_chans[i]
 	}
 
+	total_uploaded := i * int64(TMP_BUFFER_SIZE)
 	log.Printf("Total chunks: %v\n", len(parts))
+	log.Printf("Total uploaded: %v (%v bytes)\n", humanize.Bytes(uint64(total_uploaded)), total_uploaded)
 	log.Printf("Finalizing multipart upload\n")
 
 	err = m.Complete(parts)
@@ -247,7 +249,7 @@ func s3_part_upload(ci int, i *os.File, m *s3.Multi, c chan s3.Part, uploads syn
 		}
 	}
 
-	log.Printf("Chunk %v: upload success (N: %v, ETag: %v, Size: %v)\n", ci, p.N, p.ETag, humanize.Bytes(uint64(p.Size)))
+	log.Printf("Chunk %v: upload success (N: %v, ETag: %v, Size: %v)\n", ci, p.N, p.ETag, p.Size)
 
 	// explicitly close prior to deleting file
 	i.Close()
