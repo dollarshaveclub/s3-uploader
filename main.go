@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"github.com/crowdmob/goamz/aws"
 	"github.com/crowdmob/goamz/s3"
+	"github.com/dustin/go-humanize"
 	"io/ioutil"
 	"log"
 	"os"
@@ -45,8 +46,8 @@ func init() {
 		fmt.Fprintf(os.Stderr, "S3 key parameter missing\n")
 		os.Exit(1)
 	}
-	if *chunk_size < 5000000 || *chunk_size > 5000000000 { // 5MB <= x <= 5GB
-		fmt.Fprintf(os.Stderr, "Invalid chunk size: must be between 5MB and 5GB (inclusive)\n")
+	if *chunk_size < 5242880 || *chunk_size > 5368709120 { // 5MiB <= x <= 5GiB
+		fmt.Fprintf(os.Stderr, "Invalid chunk size: must be between 5MiB and 5GiB (inclusive)\n")
 		os.Exit(1)
 	}
 	if os.Getenv("AWS_ACCESS_KEY") == "" || os.Getenv("AWS_SECRET_KEY") == "" {
@@ -77,13 +78,13 @@ func main() {
 	log.Printf("Region: %v\n", *s3_region)
 	log.Printf("Bucket: %v\n", *s3_bucket)
 	log.Printf("Key: %v\n", *s3_key)
-	log.Printf("Chunk size: %v\n", *chunk_size)
+	log.Printf("Chunk size: %v\n", humanize.Bytes(uint64(*chunk_size)))
 
 	read_buffer := make([]byte, TMP_BUFFER_SIZE)
 	current_file_size := int64(0)
 	current_chunk_index := 0
 	temp_files := make([]*os.File, 1)
-	temp_files[0] = new_temp_file(current_chunk_index)
+	temp_files[0] = new_temp_file(current_chunk_index, int64(0))
 	part_chans := make([]chan s3.Part, 0)
 	var uploads sync.WaitGroup
 
@@ -132,7 +133,7 @@ func main() {
 				upload_temp_file(temp_files[current_chunk_index], uploads, current_chunk_index, m, &part_chans)
 				current_chunk_index += 1
 				current_file_size = int64(0)
-				temp_files = append(temp_files, new_temp_file(current_chunk_index))
+				temp_files = append(temp_files, new_temp_file(current_chunk_index, i*int64(TMP_BUFFER_SIZE)))
 			}
 		}
 		n, stdin_err = os.Stdin.Read(read_buffer)
@@ -191,12 +192,12 @@ func cleanup(tf []*os.File) {
 	}
 }
 
-func new_temp_file(ci int) *os.File {
+func new_temp_file(ci int, n int64) *os.File {
 	f, err := ioutil.TempFile("", fmt.Sprintf("s3upload-chunk-%v", ci))
 	if err != nil {
 		log.Fatalf("Chunk %v: error creating tempfile: %v\n", ci, err)
 	}
-	log.Printf("chunk %v: temp file: %v\n", ci, f.Name())
+	log.Printf("chunk %v: temp file: %v\n (total bytes so far: %v)", ci, f.Name(), humanize.Bytes(uint64(n)))
 	return f
 }
 
@@ -228,7 +229,7 @@ func s3_part_upload(ci int, i *os.File, m *s3.Multi, c chan s3.Part, uploads syn
 	var p s3.Part
 	var u_err error
 	for i := uint(1); true; i++ {
-		log.Printf("Chunk %v: starting upload (%v; size: %v)\n", ci, tn, stat.Size())
+		log.Printf("Chunk %v: starting upload (%v; size: %v)\n", ci, tn, humanize.Bytes(uint64(stat.Size())))
 		p, u_err = m.PutPart(ci+1, f)
 		if u_err != nil {
 			log.Printf("Chunk %v: upload error: %v (%v)\n", ci, u_err, tn)
@@ -246,7 +247,7 @@ func s3_part_upload(ci int, i *os.File, m *s3.Multi, c chan s3.Part, uploads syn
 		}
 	}
 
-	log.Printf("Chunk %v: upload success (N: %v, ETag: %v, Size: %v)\n", ci, p.N, p.ETag, p.Size)
+	log.Printf("Chunk %v: upload success (N: %v, ETag: %v, Size: %v)\n", ci, p.N, p.ETag, humanize.Bytes(uint64(p.Size)))
 
 	// explicitly close prior to deleting file
 	i.Close()
