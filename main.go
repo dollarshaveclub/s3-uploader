@@ -213,7 +213,7 @@ func new_temp_file(ci int, n int64) *os.File {
 	if err != nil {
 		log.Fatalf("Chunk %v: error creating tempfile: %v\n", ci, err)
 	}
-	log.Printf("chunk %v: temp file: %v\n (total bytes so far: %v)", ci, f.Name(), humanize.Bytes(uint64(n)))
+	log.Printf("Chunk %v: temp file: %v\n (total bytes so far: %v)", ci, f.Name(), humanize.Bytes(uint64(n)))
 	return f
 }
 
