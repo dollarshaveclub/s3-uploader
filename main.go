@@ -28,13 +28,38 @@ var mime_type = flag.String("mime_type", DEFAULT_MIME_TYPE, "Content-type (MIME 
 var expected_size = flag.Int64("expected_size", 0, "expected input size (fail if out of bounds)")
 var acl_string = flag.String("acl", "bucket-owner-full-control", "ACL for new object")
 var use_sse = flag.Bool("sse", false, "use server side encryption")
-var retrys = flag.Uint("retrys", 4, "number of retry attempts per chunk upload")
+var retries = flag.Uint("retries", 4, "number of retry attempts per chunk upload")
 var multi_error struct {
 	sync.Mutex
 	error bool
 }
 
 var aws_auth, aws_auth_err = aws.EnvAuth()
+
+func set_multi_error(e bool) {
+	multi_error.Lock()
+	multi_error.error = e
+	multi_error.Unlock()
+}
+
+func clear_multi_error() {
+	set_multi_error(false)
+}
+
+func raise_multi_error(m string) {
+	log.Printf("Raising multipart error: %v\n", m)
+	set_multi_error(true)
+}
+
+func abort_if_error(m *s3.Multi) {
+	multi_error.Lock()
+	defer multi_error.Unlock()
+
+	if multi_error.error {
+		m.Abort()
+		log.Fatalf("Multipart upload aborted due to error(s)\n")
+	}
+}
 
 func init() {
 	flag.Parse()
@@ -58,9 +83,7 @@ func init() {
 		fmt.Fprintf(os.Stderr, "AWS authentication error\n")
 		os.Exit(1)
 	}
-	multi_error.Lock()
-	multi_error.error = false
-	multi_error.Unlock()
+	clear_multi_error()
 }
 
 func main() {
@@ -164,17 +187,6 @@ func main() {
 	log.Printf("Mulipart upload complete\n")
 }
 
-func abort_if_error(m *s3.Multi) {
-	multi_error.Lock()
-	if !multi_error.error {
-		multi_error.Unlock()
-	} else {
-		multi_error.Unlock()
-		m.Abort()
-		log.Fatalf("Multipart upload aborted due to error(s)\n")
-	}
-}
-
 func upload_temp_file(f *os.File, uploads sync.WaitGroup, ci int, m *s3.Multi, pc *[]chan s3.Part) {
 	f.Close()
 	uploads.Add(1)
@@ -212,9 +224,7 @@ func s3_part_upload(ci int, i *os.File, m *s3.Multi, c chan s3.Part, uploads syn
 	f, err := os.Open(tn)
 	if err != nil {
 		log.Printf("Chunk %v: error opening input file: %v: %v\n", ci, tn, err)
-		multi_error.Lock()
-		multi_error.error = true
-		multi_error.Unlock()
+		raise_multi_error(fmt.Sprintf("Chunk %v: %v\n", ci, err))
 		return
 	}
 	defer f.Close() //defer in case of error even though we explicitly close below
@@ -222,9 +232,7 @@ func s3_part_upload(ci int, i *os.File, m *s3.Multi, c chan s3.Part, uploads syn
 	stat, err := f.Stat()
 	if err != nil {
 		log.Printf("Chunk %v: error getting input file info: %v: %v\n", ci, tn, err)
-		multi_error.Lock()
-		multi_error.error = true
-		multi_error.Unlock()
+		raise_multi_error(fmt.Sprintf("Chunk %v: %v\n", ci, err))
 		return
 	}
 
@@ -235,12 +243,10 @@ func s3_part_upload(ci int, i *os.File, m *s3.Multi, c chan s3.Part, uploads syn
 		p, u_err = m.PutPart(ci+1, f)
 		if u_err != nil {
 			log.Printf("Chunk %v: upload error: %v (%v)\n", ci, u_err, tn)
-			if i <= *retrys {
-				log.Printf("Chunk %v: retrying (%v/%v)", ci, i, *retrys)
+			if i <= *retries {
+				log.Printf("Chunk %v: retrying (%v/%v)", ci, i, *retries)
 			} else {
-				multi_error.Lock()
-				multi_error.error = true
-				multi_error.Unlock()
+				raise_multi_error(fmt.Sprintf("Chunk %v: retries exceeded\n", ci))
 				return
 			}
 		} else {

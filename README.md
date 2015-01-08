@@ -25,7 +25,7 @@ Usage of ./s3_uploader:
   -key="": S3 key name (required; use / notation for folders)
   -mime_type="binary/octet-stream": Content-type (MIME type)
   -region="us-west-2": AWS S3 region
-  -retrys=4: number of retry attempts per chunk upload
+  -retries=4: number of retry attempts per chunk upload
   -sse=false: use server side encryption
 ```
 
