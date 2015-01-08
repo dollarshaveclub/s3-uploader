@@ -15,20 +15,22 @@ import (
 )
 
 const (
-	TMP_BUFFER_SIZE   = 10000
-	DEFAULT_REGION    = "us-west-2"
-	DEFAULT_MIME_TYPE = "binary/octet-stream"
+	TMP_BUFFER_SIZE    = 10000
+	DEFAULT_REGION     = "us-west-2"
+	DEFAULT_MIME_TYPE  = "binary/octet-stream"
+	DEFAULT_CHUNK_SIZE = 50000000
+	DEFAULT_RETRIES    = 4
 )
 
 var s3_bucket = flag.String("bucket", "", "S3 bucket name (required)")
 var s3_key = flag.String("key", "", "S3 key name (required; use / notation for folders)")
 var s3_region = flag.String("region", DEFAULT_REGION, "AWS S3 region")
-var chunk_size = flag.Int64("chunk_size", 50000000, "multipart upload chunk size (bytes)")
+var chunk_size = flag.Int64("chunk_size", DEFAULT_CHUNK_SIZE, "multipart upload chunk size (bytes)")
 var mime_type = flag.String("mime_type", DEFAULT_MIME_TYPE, "Content-type (MIME type)")
 var expected_size = flag.Int64("expected_size", 0, "expected input size (fail if out of bounds)")
 var acl_string = flag.String("acl", "bucket-owner-full-control", "ACL for new object")
 var use_sse = flag.Bool("sse", false, "use server side encryption")
-var retries = flag.Uint("retries", 4, "number of retry attempts per chunk upload")
+var retries = flag.Uint("retries", DEFAULT_RETRIES, "number of retry attempts per chunk upload")
 var multi_error struct {
 	sync.Mutex
 	error bool
