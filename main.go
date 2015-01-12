@@ -3,6 +3,7 @@
 package main
 
 import (
+	"crypto/rand"
 	"flag"
 	"fmt"
 	"github.com/crowdmob/goamz/aws"
@@ -10,22 +11,25 @@ import (
 	"github.com/dustin/go-humanize"
 	"io/ioutil"
 	"log"
+	"math/big"
 	"os"
 	"sync"
+	"time"
 )
 
 const (
 	TMP_BUFFER_SIZE    = 10000
 	DEFAULT_REGION     = "us-west-2"
 	DEFAULT_MIME_TYPE  = "binary/octet-stream"
-	DEFAULT_CHUNK_SIZE = 50000000
+	DEFAULT_CHUNK_SIZE = "50MB"
 	DEFAULT_RETRIES    = 4
+	DEFAULT_SLEEP      = 500
 )
 
 var s3_bucket = flag.String("bucket", "", "S3 bucket name (required)")
 var s3_key = flag.String("key", "", "S3 key name (required; use / notation for folders)")
 var s3_region = flag.String("region", DEFAULT_REGION, "AWS S3 region")
-var chunk_size = flag.Int64("chunk_size", DEFAULT_CHUNK_SIZE, "multipart upload chunk size (bytes)")
+var chunk_size_string = flag.String("chunk_size", DEFAULT_CHUNK_SIZE, "multipart upload chunk size (bytes)")
 var mime_type = flag.String("mime_type", DEFAULT_MIME_TYPE, "Content-type (MIME type)")
 var expected_size = flag.Int64("expected_size", 0, "expected input size (fail if out of bounds)")
 var acl_string = flag.String("acl", "bucket-owner-full-control", "ACL for new object")
@@ -36,6 +40,7 @@ var multi_error struct {
 	error bool
 }
 
+var chunk_size int64
 var aws_auth, aws_auth_err = aws.EnvAuth()
 
 func set_multi_error(e bool) {
@@ -63,47 +68,70 @@ func abort_if_error(m *s3.Multi) {
 	}
 }
 
+func random_sleep() {
+	default_d := big.NewInt(int64(DEFAULT_SLEEP))
+	d, err := rand.Int(rand.Reader, big.NewInt(int64(1000))) // random int between 0 and 1000
+	if err == nil {
+		log.Printf("Error getting random number! Default sleep duration used: %v\n", *default_d)
+		d = default_d
+	} else {
+		log.Printf("Sleeping: %v ms\n", *d)
+	}
+	time.Sleep(time.Duration(d.Int64()) * time.Millisecond)
+}
+
 func init() {
 	flag.Parse()
 	if *s3_bucket == "" {
-		fmt.Fprintf(os.Stderr, "S3 bucket parameter missing\n")
-		os.Exit(1)
+		log.Fatalf("S3 bucket parameter missing\n")
 	}
 	if *s3_key == "" {
-		fmt.Fprintf(os.Stderr, "S3 key parameter missing\n")
-		os.Exit(1)
+		log.Fatalf("S3 key parameter missing\n")
 	}
-	if *chunk_size < 5242880 || *chunk_size > 5368709120 { // 5MiB <= x <= 5GiB
-		fmt.Fprintf(os.Stderr, "Invalid chunk size: must be between 5MiB and 5GiB (inclusive)\n")
-		os.Exit(1)
+	cs, err := humanize.ParseBytes(*chunk_size_string)
+	if err != nil {
+		log.Fatalf("Invalid chunk size: %v\n", err)
+	}
+	chunk_size = int64(cs)
+	if chunk_size < 5242880 || chunk_size > 5368709120 { // 5MiB <= x <= 5GiB
+		log.Fatalf("Invalid chunk size: must be between 5MiB and 5GiB (inclusive)\n")
 	}
 	if os.Getenv("AWS_ACCESS_KEY") == "" || os.Getenv("AWS_SECRET_KEY") == "" {
-		fmt.Fprintf(os.Stderr, "AWS credentials must be passed as environment variables\n")
-		os.Exit(1)
+		log.Fatalf("AWS credentials must be passed as environment variables\n")
 	}
 	if aws_auth_err != nil {
-		fmt.Fprintf(os.Stderr, "AWS authentication error\n")
-		os.Exit(1)
+		log.Fatalf("AWS authentication error\n")
 	}
 	clear_multi_error()
 }
 
 func main() {
+	var err error
+	var m *s3.Multi
+
 	s := s3.New(aws_auth, aws.Regions[*s3_region])
 	options := s3.Options{
 		SSE: *use_sse,
 	}
 	b := s.Bucket(*s3_bucket)
-	m, err := b.Multi(*s3_key, *mime_type, s3.ACL(*acl_string), options)
+	for n := uint(1); n <= *retries; n++ {
+		m, err = b.Multi(*s3_key, *mime_type, s3.ACL(*acl_string), options)
+		if err == nil {
+			break
+		}
+		log.Printf("Error creating multipart upload: %v\n", err)
+		log.Printf("Retrying (%v/%v)", n, *retries)
+		random_sleep()
+	}
 	if err != nil {
-		log.Fatalf("Error initializing multipart upload: %v\n", err)
+		log.Fatalf("Error initializing multipart upload (retries exceeded): %v\n", err)
 	}
 
 	log.Printf("Starting multipart upload\n")
 	log.Printf("Region: %v\n", *s3_region)
 	log.Printf("Bucket: %v\n", *s3_bucket)
 	log.Printf("Key: %v\n", *s3_key)
-	log.Printf("Chunk size: %v\n", humanize.Bytes(uint64(*chunk_size)))
+	log.Printf("Chunk size: %v\n", humanize.Bytes(uint64(chunk_size)))
 
 	read_buffer := make([]byte, TMP_BUFFER_SIZE)
 	current_file_size := int64(0)
@@ -116,8 +144,8 @@ func main() {
 	expected_count := int64(0)
 	expected_read_count := int64(0)
 	if *expected_size != 0 {
-		expected_count = *expected_size / *chunk_size
-		if *expected_size%*chunk_size > 0 {
+		expected_count = *expected_size / chunk_size
+		if *expected_size%chunk_size > 0 {
 			expected_count += 1
 		}
 
@@ -154,7 +182,7 @@ func main() {
 				log.Fatalf("Temp file size (%v) does not equal expected size (%v): %v\n",
 					stat.Size(), current_file_size, temp_files[current_chunk_index].Name())
 			}
-			if current_file_size >= *chunk_size {
+			if current_file_size >= chunk_size {
 				upload_temp_file(temp_files[current_chunk_index], uploads, current_chunk_index, m, &part_chans)
 				current_chunk_index += 1
 				current_file_size = int64(0)
@@ -181,12 +209,22 @@ func main() {
 	log.Printf("Total uploaded: %v (%v bytes)\n", humanize.Bytes(uint64(total_uploaded)), total_uploaded)
 	log.Printf("Finalizing multipart upload\n")
 
-	err = m.Complete(parts)
-	if err != nil {
-		log.Fatalf("Error finalizing upload: %v\n", err)
+	for j := uint(1); j <= *retries-1; j++ {
+		err = m.Complete(parts)
+		if err == nil {
+			break
+		}
+		log.Printf("Error finalizing upload: %v\n", err)
+		log.Printf("Retrying (%v/%v)", j, *retries)
+		random_sleep()
 	}
 
-	log.Printf("Mulipart upload complete\n")
+	if err != nil {
+		log.Printf("Retries exceeded: aborting upload")
+		m.Abort()
+	} else {
+		log.Printf("Mulipart upload complete\n")
+	}
 }
 
 func upload_temp_file(f *os.File, uploads sync.WaitGroup, ci int, m *s3.Multi, pc *[]chan s3.Part) {
@@ -247,6 +285,7 @@ func s3_part_upload(ci int, i *os.File, m *s3.Multi, c chan s3.Part, uploads syn
 			log.Printf("Chunk %v: upload error: %v (%v)\n", ci, u_err, tn)
 			if i <= *retries {
 				log.Printf("Chunk %v: retrying (%v/%v)", ci, i, *retries)
+				random_sleep()
 			} else {
 				raise_multi_error(fmt.Sprintf("Chunk %v: retries exceeded\n", ci))
 				return

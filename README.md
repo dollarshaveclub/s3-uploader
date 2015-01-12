@@ -20,7 +20,7 @@ to have enough space to store the entire data set on disk at once since individu
 Usage of ./s3_uploader:
   -acl="bucket-owner-full-control": ACL for new object
   -bucket="": S3 bucket name (required)
-  -chunk_size=50000000: multipart upload chunk size (bytes)
+  -chunk_size=50MB: multipart upload chunk size (bytes, understands standard suffixes like "KB", "MB", "MiB", etc.)
   -expected_size=0: expected input size (fail if out of bounds)
   -key="": S3 key name (required; use / notation for folders)
   -mime_type="binary/octet-stream": Content-type (MIME type)
@@ -34,5 +34,5 @@ Usage Example:
 ```
 $ AWS_ACCESS_KEY="foobar"
 $ AWS_SECRET_KEY="s3cr3t"
-$ mysqldump --host $DB_HOST --user=$DB_USER --password=$DB_PASSWORD |gzip |s3_uploader -region "${S3_REGION}" -bucket "${S3_BUCKET}" -key "${S3_KEY}" -sse "${S3_SSE}"
+$ mysqldump --host $DB_HOST --user=$DB_USER --password=$DB_PASSWORD |pigz |s3_uploader -region "${S3_REGION}" -bucket "${S3_BUCKET}" -key "${S3_KEY}" -sse -chunk–size 25MiB
 ```
