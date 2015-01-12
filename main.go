@@ -68,14 +68,14 @@ func abort_if_error(m *s3.Multi) {
 	}
 }
 
-func random_sleep() {
+func random_sleep(p string) {
 	default_d := big.NewInt(int64(DEFAULT_SLEEP))
 	d, err := rand.Int(rand.Reader, big.NewInt(int64(1000))) // random int between 0 and 1000
-	if err == nil {
-		log.Printf("Error getting random number! Default sleep duration used: %v\n", *default_d)
+	if err != nil {
+		log.Printf("%v: error getting random number! default sleep duration used: %v\n", p, *default_d)
 		d = default_d
 	} else {
-		log.Printf("Sleeping: %v ms\n", *d)
+		log.Printf("%v: sleeping: %v ms\n", p, *d)
 	}
 	time.Sleep(time.Duration(d.Int64()) * time.Millisecond)
 }
@@ -121,7 +121,7 @@ func main() {
 		}
 		log.Printf("Error creating multipart upload: %v\n", err)
 		log.Printf("Retrying (%v/%v)", n, *retries)
-		random_sleep()
+		random_sleep("Initializing multipart upload")
 	}
 	if err != nil {
 		log.Fatalf("Error initializing multipart upload (retries exceeded): %v\n", err)
@@ -216,7 +216,7 @@ func main() {
 		}
 		log.Printf("Error finalizing upload: %v\n", err)
 		log.Printf("Retrying (%v/%v)", j, *retries)
-		random_sleep()
+		random_sleep("Finalizing multipart upload")
 	}
 
 	if err != nil {
@@ -285,7 +285,7 @@ func s3_part_upload(ci int, i *os.File, m *s3.Multi, c chan s3.Part, uploads syn
 			log.Printf("Chunk %v: upload error: %v (%v)\n", ci, u_err, tn)
 			if i <= *retries {
 				log.Printf("Chunk %v: retrying (%v/%v)", ci, i, *retries)
-				random_sleep()
+				random_sleep(fmt.Sprintf("Chunk %v", ci))
 			} else {
 				raise_multi_error(fmt.Sprintf("Chunk %v: retries exceeded\n", ci))
 				return
