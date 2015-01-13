@@ -75,7 +75,7 @@ func random_sleep(p string) {
 		log.Printf("%v: error getting random number! default sleep duration used: %v\n", p, *default_d)
 		d = default_d
 	} else {
-		log.Printf("%v: sleeping: %v ms\n", p, *d)
+		log.Printf("%v: sleeping: %v ms\n", p, d.Int64())
 	}
 	time.Sleep(time.Duration(d.Int64()) * time.Millisecond)
 }
