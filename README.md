@@ -4,7 +4,7 @@ s3_uploader
 Stream to S3 from stdin using concurrent, multipart uploading.
 
 Intended for use with sources that stream data fairly slowly (like RDS dumps),
-such that getting the initial data is the dominant bottleneck.
+such that getting the initial data is the dominant bottleneck. It is also useful to upload large files as quickly as possible using concurrent multipart uploading.
 
 Traditionally (eg, using s3cmd) you would have to wait to get all the data (possibly compressing it), write to a local temporary file, then
 upload this file to S3--either monolithically or multipart[1].
@@ -29,10 +29,21 @@ Usage of ./s3_uploader:
   -sse=false: use server side encryption
 ```
 
-Usage Example:
---------------
-```
+Usage Examples:
+---------------
+
+**Streaming:**
+
+```bash
 $ AWS_ACCESS_KEY="foobar"
 $ AWS_SECRET_KEY="s3cr3t"
 $ mysqldump --host $DB_HOST --user=$DB_USER --password=$DB_PASSWORD |pigz |s3_uploader -region "${S3_REGION}" -bucket "${S3_BUCKET}" -key "${S3_KEY}" -sse -chunk–size 25MiB
+```
+
+**Local file:**
+
+```bash
+$ AWS_ACCESS_KEY="foobar"
+$ AWS_SECRET_KEY="s3cr3t"
+$ s3_uploader -region "${S3_REGION}" -bucket "${S3_BUCKET}" -key "${S3_KEY}" -sse -chunk_size 25MiB < my_large_file.dat
 ```
